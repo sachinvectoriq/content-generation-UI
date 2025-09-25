@@ -3,19 +3,15 @@ import React, { useState } from "react";
 import TranscriptInput from "./input/TranscriptInput.jsx";
 import FormatSelector from "./input/FormatSelector.jsx";
 import ActionButtons from "./input/ActionButtons.jsx";
-import GeneratedResults from "./results/GeneratedResults.jsx";
-import FeedbackModal from "../modals/FeedbackModal.jsx";
+import GroupedAnalysisResults from "./results/AnalysisResults.jsx";
 import Toast from "../ui/Toast.jsx";
+import analysisService from "../../services/analysisService.js";
 
 const GenerationForm = () => {
   const [inputTranscript, setInputTranscript] = useState("");
-  const [generatedOutputs, setGeneratedOutputs] = useState({
-    bpmn: null,
-    processDoc: null,
-    trainingScript: null
-  });
+  const [analysisOutput, setAnalysisOutput] = useState(null);
   
-  // Output format selection
+  // Output format selection - mapped to API format
   const [selectedFormats, setSelectedFormats] = useState({
     bpmn: false,
     processDoc: false,
@@ -26,23 +22,35 @@ const GenerationForm = () => {
   const [validationErrors, setValidationErrors] = useState({});
   const [copied, setCopied] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
-  const [generatedFiles, setGeneratedFiles] = useState([]);
-  
-  // Feedback states
-  const [feedbackStates, setFeedbackStates] = useState({});
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [selectedOutput, setSelectedOutput] = useState("");
-  const [feedbackOption, setFeedbackOption] = useState("");
-  const [customFeedback, setCustomFeedback] = useState("");
-  const [feedbackSubmitted, setFeedbackSubmitted] = useState(false);
+  const [apiError, setApiError] = useState(null);
 
   // File handling for transcript uploads
   const [fileErrors, setFileErrors] = useState({
     attachFiles: "",
   });
 
+  // Map UI formats to API format
+  const mapFormatsToApiOutputs = (formats) => {
+    const outputs = [];
+    
+    // Always include summary if any format is selected
+    if (formats.bpmn || formats.processDoc || formats.trainingScript) {
+      outputs.push("summary");
+    }
+    
+    if (formats.bpmn) outputs.push("bpmn");
+    if (formats.processDoc) outputs.push("process_description");
+    if (formats.trainingScript) {
+      outputs.push("synthesia_script");
+      outputs.push("synthesia_media");
+    }
+    
+    return outputs;
+  };
+
   const handleGenerate = async () => {
     const errors = {};
+    setApiError(null);
     
     if (!inputTranscript.trim() && attachedFiles.length === 0) {
       errors.inputTranscript = "Please enter transcript text or attach transcript files.";
@@ -59,43 +67,36 @@ const GenerationForm = () => {
     setIsGenerating(true);
 
     try {
-      // Simulate API call for content generation
-      const mockGeneratedFiles = [];
+      // Prepare API parameters
+      const selectedOutputs = mapFormatsToApiOutputs(selectedFormats);
       
-      if (selectedFormats.bpmn) {
-        mockGeneratedFiles.push({
-          type: 'bpmn',
-          name: 'Process_Diagram.xml',
-          content: 'Generated BPMN XML content...',
-          status: 'completed'
-        });
-      }
-      
-      if (selectedFormats.processDoc) {
-        mockGeneratedFiles.push({
-          type: 'processDoc',
-          name: 'Process_Documentation.docx',
-          content: 'Generated process document content...',
-          status: 'completed'
-        });
-      }
-      
-      if (selectedFormats.trainingScript) {
-        mockGeneratedFiles.push({
-          type: 'trainingScript',
-          name: 'Training_Script.txt',
-          content: 'Generated Synthesia training script...',
-          status: 'completed'
-        });
-      }
+      const apiParams = {
+        selectedOutputs,
+        ...(attachedFiles.length > 0 
+          ? { transcriptFile: attachedFiles[0].file || attachedFiles[0] }
+          : { transcript: inputTranscript }
+        )
+      };
 
-      // Simulate API delay
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      console.log('Sending API request with params:', {
+        selectedOutputs,
+        hasFile: !!apiParams.transcriptFile,
+        hasText: !!apiParams.transcript
+      });
+
+      const response = await analysisService.analyzeTranscript(apiParams);
       
-      setGeneratedFiles(mockGeneratedFiles);
+      if (response.success) {
+        setAnalysisOutput(response.data);
+        console.log('Analysis completed successfully');
+      } else {
+        setApiError(response.error);
+        console.error('Analysis failed:', response.error);
+      }
       
     } catch (error) {
       console.error("Generation error:", error);
+      setApiError("An unexpected error occurred. Please try again.");
     } finally {
       setIsGenerating(false);
     }
@@ -103,28 +104,29 @@ const GenerationForm = () => {
 
   const handleClear = () => {
     setInputTranscript("");
-    setGeneratedOutputs({ bpmn: null, processDoc: null, trainingScript: null });
+    setAnalysisOutput(null);
     setSelectedFormats({ bpmn: false, processDoc: false, trainingScript: false });
     setAttachedFiles([]);
-    setGeneratedFiles([]);
     setCopied(false);
     setValidationErrors({});
     setFileErrors({ attachFiles: "" });
-    setFeedbackStates({});
+    setApiError(null);
   };
 
   const handleInputTranscriptChange = (e) => {
     const newText = e.target.value;
     setInputTranscript(newText);
     setAttachedFiles([]);
-    setGeneratedFiles([]);
+    setAnalysisOutput(null);
+    setApiError(null);
   };
 
   const handleFileChange = (event) => {
     const files = Array.from(event.target.files);
+    const supportedExtensions = ["txt", "pdf", "doc", "docx"];
     const unsupportedFiles = files.filter((file) => {
       const extension = file.name.split(".").pop().toLowerCase();
-      return !["txt", "pdf", "doc", "docx"].includes(extension);
+      return !supportedExtensions.includes(extension);
     });
 
     if (unsupportedFiles.length > 0) {
@@ -134,9 +136,19 @@ const GenerationForm = () => {
       }));
     } else {
       setFileErrors((prev) => ({ ...prev, attachFiles: "" }));
-      setAttachedFiles((prev) => [...prev, ...files]); 
+      
+      // Store files with proper structure
+      const formattedFiles = files.map(file => ({
+        file: file,
+        name: file.name,
+        size: file.size,
+        type: file.type
+      }));
+      
+      setAttachedFiles(formattedFiles);
       setInputTranscript("");
-      setGeneratedFiles([]);
+      setAnalysisOutput(null);
+      setApiError(null);
     }
   };
 
@@ -146,6 +158,8 @@ const GenerationForm = () => {
       newFiles.splice(index, 1);
       return newFiles;
     });
+    setAnalysisOutput(null);
+    setApiError(null);
   };
 
   const handleFormatChange = (format) => {
@@ -153,78 +167,17 @@ const GenerationForm = () => {
       ...prev,
       [format]: !prev[format]
     }));
-  };
-
-  const handleCopy = (content) => {
-    navigator.clipboard.writeText(content);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
-  const openFeedbackModal = (outputType) => {
-    setSelectedOutput(outputType);
-    setIsModalOpen(true);
-    setFeedbackSubmitted(false);
-  };
-
-  const closeModal = () => {
-    setIsModalOpen(false);
-    setFeedbackOption("");
-    setCustomFeedback("");
-    setFeedbackSubmitted(false);
-  };
-
-  const submitFeedback = async () => {
-    // Mock feedback submission
-    console.log('Feedback submitted for:', selectedOutput, feedbackOption, customFeedback);
-    setFeedbackSubmitted(true);
-    setTimeout(() => {
-      closeModal();
-    }, 1500);
-  };
-
-  const downloadFile = (file) => {
-    // Mock download functionality
-    const blob = new Blob([file.content], { type: 'text/plain' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = file.name;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  };
-
-  const downloadAllFiles = () => {
-    generatedFiles.forEach(file => {
-      if (file.status === 'completed') {
-        downloadFile(file);
-      }
-    });
+    setAnalysisOutput(null);
   };
 
   const handleFocus = (field) => {
     setValidationErrors((prev) => ({ ...prev, [field]: "" }));
-  };
-
-  const handleThumbsUp = (fileType) => {
-    console.log('Thumbs up for', fileType);
-  };
-
-  const handleThumbsDown = (fileType) => {
-    openFeedbackModal(fileType);
+    setApiError(null);
   };
 
   return (
     <div className="flex items-center justify-center">
       <div className="w-[800px] min-h-[500px] p-6 mt-[30px] bg-white shadow-lg rounded-lg">
-        
-        {/* Header 
-        <div className="text-center mb-6">
-          <h2 className="text-2xl font-bold text-gray-800 mb-2">Content Generation</h2>
-          <p className="text-gray-600">Transform meeting transcripts into structured business documentation</p>
-        </div>*/}
 
         {/* Transcript Input Component */}
         <TranscriptInput
@@ -252,33 +205,33 @@ const GenerationForm = () => {
           isGenerating={isGenerating}
           inputTranscript={inputTranscript}
           attachedFiles={attachedFiles}
-          generatedFiles={generatedFiles}
+          generatedFiles={[]} // Not used anymore, but keeping for compatibility
         />
 
-        {/* Generated Results Component */}
-        {generatedFiles.length > 0 && (
-          <GeneratedResults
-            generatedFiles={generatedFiles}
-            onDownload={downloadFile}
-            onCopy={handleCopy}
-            onDownloadAll={downloadAllFiles}
-            onThumbsUp={handleThumbsUp}
-            onThumbsDown={handleThumbsDown}
-          />
+        {/* API Error Display */}
+        {apiError && (
+          <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-md">
+            <div className="text-red-800">
+              <strong>Error:</strong> {apiError}
+            </div>
+          </div>
         )}
 
-        {/* Feedback Modal Component */}
-        <FeedbackModal
-          isOpen={isModalOpen}
-          selectedOutput={selectedOutput}
-          feedbackOption={feedbackOption}
-          customFeedback={customFeedback}
-          feedbackSubmitted={feedbackSubmitted}
-          onFeedbackOptionChange={setFeedbackOption}
-          onCustomFeedbackChange={setCustomFeedback}
-          onSubmit={submitFeedback}
-          onClose={closeModal}
-        />
+        {/* Loading State */}
+        {isGenerating && (
+          <div className="flex items-center justify-center py-8 mb-6">
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+            <span className="ml-3 text-gray-600">Analyzing transcript...</span>
+          </div>
+        )}
+
+        {/* Analysis Results Component */}
+        {analysisOutput && !isGenerating && (
+          <GroupedAnalysisResults 
+            analysisOutput={analysisOutput} 
+            selectedFormats={selectedFormats} 
+          />
+        )}
 
         {/* Toast Notification Component */}
         <Toast
