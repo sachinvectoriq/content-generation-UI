@@ -31,11 +31,49 @@ export const analysisService = {
         body: formData,
       });
       
+      // Handle error responses
       if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+        let errorDetails;
+        
+        try {
+          // Try to parse error response as JSON to get the actual error details
+          const errorData = await response.json();
+          
+          // Ensure we always return an object with a detail property
+          errorDetails = {
+            detail: errorData.detail || errorData.message || `HTTP ${response.status}: ${response.statusText}`,
+            status: response.status,
+            statusText: response.statusText
+          };
+        } catch (parseError) {
+          // If response body is not JSON, fall back to status text
+          errorDetails = { 
+            detail: `HTTP ${response.status}: ${response.statusText || 'Unknown error'}`,
+            status: response.status,
+            statusText: response.statusText
+          };
+        }
+        
+        console.error('API Error Response:', errorDetails);
+        
+        return {
+          success: false,
+          error: errorDetails
+        };
       }
       
       const data = await response.json();
+      
+      // Validate response structure
+      if (!data || !data.output) {
+        return {
+          success: false,
+          error: {
+            detail: 'Invalid response format from server'
+          }
+        };
+      }
+      
       return {
         success: true,
         data: data.output
@@ -43,9 +81,14 @@ export const analysisService = {
       
     } catch (error) {
       console.error('Analysis API error:', error);
+      
+      // Handle network errors or other fetch errors
       return {
         success: false,
-        error: error.message || 'Failed to analyze transcript'
+        error: {
+          detail: error.message || 'Network error. Please check your connection and try again.',
+          originalError: error.name
+        }
       };
     }
   }
